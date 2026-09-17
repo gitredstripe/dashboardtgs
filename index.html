@@ -297,8 +297,9 @@ table.ag td.tot{background:var(--blue-tint);color:var(--blue);font-weight:700}
    <button id="btnRepGen" class="btnbit" style="background:var(--good);border-color:var(--good);color:#fff;font-size:13px;padding:7px 12px" title="Baja el listado por módulo y el cronograma básico con los datos que tiene el tablero en este momento">Reporte general (.xls)</button>
    <button id="btnCorte" class="btnbit" style="background:var(--blue);border-color:var(--blue);color:#fff;font-size:13px;padding:7px 12px">Guardar corte</button>
    <button id="btnHist">Historial de cortes</button>
-   <button id="btnSave" title="Descarga TODO el estado del tablero en un archivo .json con sello de tiempo por actividad">Guardar captura (.json)</button>
-   <button id="btnLoad" title="Compara un .json de captura contra lo que hay ahora y te deja elegir cómo fusionarlo, sin borrar lo capturado">Cargar captura (.json)</button>
+   <button id="btnSave" title="Guarda el tablero compartido. Quien abra este enlace verá esta versión.">Guardar tablero</button>
+   <button id="btnDl" title="Descarga una copia .json en este equipo">Descargar .json</button>
+   <button id="btnLoad" title="Carga un .json local y te deja elegir cómo fusionarlo">Cargar archivo (.json)</button>
    <input type="file" id="file" accept=".json" style="display:none">
  </div>
  <div class="kpis" id="kpis"></div>
@@ -967,7 +968,47 @@ function snapshot(){
           respP:i.respP||'', fEnt:i.fEnt||'', piTipo:i.piTipo||'', piOrden:i.piOrden||'',
           sello:selloAct(i)}))}))}))};
 }
-document.getElementById('btnSave').onclick=()=>{
+const SNAP_URL='/api/snapshot';
+function normalizaSnap(snap){
+  if(Array.isArray(snap)){
+    return {app:'Tablero PF Alpha', esquema:1, generado:'', mods:snap.map(x=>({pf:x.pf, ficha:x.ficha||{},
+      comentarios:x.comentarios||[], sesiones:(x.sesiones||[]).map(y=>({...y,id:y.id||''})),
+      grupos:[{etapa:'(importado)', items:(x.act||[]).map(a=>({...a, sello:''}))}]}))};
+  }
+  return snap;
+}
+async function guardarCompartido(){
+  const snap=snapshot();
+  const r=await fetch(SNAP_URL,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(snap)});
+  if(!r.ok){
+    const t=await r.text().catch(()=> '');
+    throw new Error((t&&t.slice(0,180))||('HTTP '+r.status));
+  }
+}
+async function cargarCompartido(){
+  try{
+    const r=await fetch(SNAP_URL,{cache:'no-store'});
+    if(r.status===204||r.status===404) return false;
+    if(!r.ok) return false;
+    const snap=normalizaSnap(await r.json());
+    if(!snap||snap.app!=='Tablero PF Alpha') return false;
+    aplica(snap,'reemplazar',true);
+    return true;
+  }catch(e){ return false; }
+}
+document.getElementById('btnSave').onclick=async()=>{
+  const b=document.getElementById('btnSave');
+  const old=b.textContent; b.disabled=true; b.textContent='Guardando…';
+  try{
+    await guardarCompartido();
+    b.textContent='Guardado';
+    alert('Tablero guardado. Cualquier persona que abra este enlace verá esta versión.');
+  }catch(e){
+    alert('No se pudo guardar en el servidor.\n'+(e.message||e)+'\nUsa «Descargar .json» como respaldo.');
+  }
+  b.disabled=false; setTimeout(()=>{b.textContent=old},1200);
+};
+document.getElementById('btnDl').onclick=()=>{
   const snap=snapshot(), d=new Date();
   const st=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}_${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
   dl(`Captura_Tablero_PF_${st}.json`, JSON.stringify(snap,null,1));
@@ -1011,7 +1052,7 @@ function analiza(snap){
 }
 
 let RESPALDO=null;
-function aplica(snap, modo){
+function aplica(snap, modo, silencioso){
   RESPALDO=JSON.parse(JSON.stringify(MODS));
   const A=idxAct(), S=idxSes();
   const campos=['res','com','accion','respP','fEnt','piTipo','piOrden'];
@@ -1097,6 +1138,7 @@ function aplica(snap, modo){
     m.grupos.forEach(gr=>gr.items.forEach(it=>{const ss=m.sesiones.find(z=>z.id===it.sesid); if(ss){it.fecha=ss.fecha; it.ses=ss.ses}}));
   });
   render();
+  if(silencioso) return;
   abrir(`<div class="stik"><div style="display:flex;justify-content:space-between"><div>
       <h3>Carga aplicada</h3><div class="mini2">Modo: ${modo==='complementar'?'complementar (no destructivo)':modo==='combinar'?'combinar por fecha':'reemplazar todo'}</div>
       </div><button class="x" id="dx">×</button></div></div>
@@ -2695,5 +2737,5 @@ function xlsInformeConsolidado(L,resumen){
   const b=new Blob(['﻿'+x],{type:'application/vnd.ms-excel;charset=utf-8'}), u=URL.createObjectURL(b);
   const a=document.createElement('a'); a.href=u; a.download='Informe_Ejecutivo_PF_Alpha.xls'; a.click(); URL.revokeObjectURL(u);
 }
-render();
+(async()=>{ await cargarCompartido(); render(); })();
 </script></body></html>

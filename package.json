@@ -1,0 +1,12 @@
+{
+  "name": "dashboardtgs",
+  "private": true,
+  "version": "1.0.0",
+  "description": "TGS dashboard with one shared JSON snapshot",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

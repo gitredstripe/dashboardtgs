@@ -1,12 +1,12 @@
-# Render Blueprint: static site, no build, publish repo root.
-# https://render.com/docs/blueprint-spec
+# Render Blueprint: Web Service (not a Static Site).
+# Static sites cannot persist writes. This process serves the dashboard
+# and stores one shared JSON snapshot on disk.
+# https://render.com/docs/web-services
 services:
   - type: web
     name: dashboardtgs
-    runtime: static
+    runtime: node
     branch: main
-    buildCommand: ""
-    staticPublishPath: .
-    envVars:
-      - key: SKIP_INSTALL_DEPS
-        value: "true"
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
