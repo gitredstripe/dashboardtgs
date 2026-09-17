@@ -982,7 +982,9 @@ async function guardarCompartido(){
   const r=await fetch(SNAP_URL,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(snap)});
   if(!r.ok){
     const t=await r.text().catch(()=> '');
-    throw new Error((t&&t.slice(0,180))||('HTTP '+r.status));
+    let msg=t;
+    try{ const j=JSON.parse(t); if(j.error) msg=j.error; }catch(e){}
+    throw new Error(msg||('HTTP '+r.status));
   }
 }
 async function cargarCompartido(){

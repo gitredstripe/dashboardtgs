@@ -1,7 +1,7 @@
 # Tablero TGS (dashboardtgs)
 
-Single-page dashboard for Pruebas Funcionales, plus a tiny Node server that
-keeps **one shared JSON snapshot** so every visitor sees the same board.
+Single-page dashboard plus a tiny Node server. The shared board is
+`data/snapshot.json` in git (`main`).
 
 ## Run locally
 
@@ -9,19 +9,24 @@ keeps **one shared JSON snapshot** so every visitor sees the same board.
 node server.js
 ```
 
-Open `http://127.0.0.1:10000/`. **Guardar tablero** writes `/api/snapshot`.
-**Descargar .json** / **Cargar archivo (.json)** are local backups.
+Open `http://127.0.0.1:10000/`. **Guardar tablero** writes `/api/snapshot`
+and, with a token, commits and pushes `data/snapshot.json`. **Descargar .json**
+/ **Cargar archivo (.json)** are local backups.
 
-## Render
+## Render — Web Service only
 
-This must be a **Web Service**, not a Static Site.
+A **Static Site cannot do this** (no server, no git push). Use a Web Service.
 
-1. If a Static Site already exists for this repo, delete or suspend it (it cannot save).
+1. If a Static Site exists for this repo, delete or suspend it.
 2. [Render Dashboard](https://dashboard.render.com/) → **New → Web Service**.
 3. Connect `gitredstripe/dashboardtgs`, branch `main`.
 4. Runtime **Node**, build `npm install`, start `node server.js`.
-5. Create Web Service. URL: `https://dashboardtgs.onrender.com` (or with a suffix).
+5. Environment → **Add**:
+   - **Key:** `GITHUB_TOKEN` (or `GH_TOKEN`)
+   - **Value:** a GitHub personal access token with **repo** access (or fine-grained **Contents: Read and write** on `gitredstripe/dashboardtgs`)
+6. Create / deploy the Web Service.
 
-Blueprint: `render.yaml`. Public URL = one shared board (no auth).
+Without that env var, Guardar still writes the file on the instance disk and
+returns an error that git push needs the token. Redeploys would lose that copy.
 
-Disk is ephemeral on a basic Web Service: a **redeploy/restart can wipe** `data/snapshot.json`. Add a persistent disk and set `DATA_DIR` if you need the snapshot to survive deploys.
+Public URL = one shared board (no auth).

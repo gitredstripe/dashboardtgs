@@ -1,6 +1,5 @@
 # Render Blueprint: Web Service (not a Static Site).
-# Static sites cannot persist writes. This process serves the dashboard
-# and stores one shared JSON snapshot on disk.
+# Static sites cannot persist writes or git-push the snapshot.
 # https://render.com/docs/web-services
 services:
   - type: web
@@ -10,3 +9,6 @@ services:
     buildCommand: npm install
     startCommand: node server.js
     healthCheckPath: /api/health
+    envVars:
+      - key: GITHUB_TOKEN
+        sync: false
