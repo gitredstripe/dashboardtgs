@@ -1,0 +1,12 @@
+# Render Blueprint: static site, no build, publish repo root.
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: dashboardtgs
+    runtime: static
+    branch: main
+    buildCommand: ""
+    staticPublishPath: .
+    envVars:
+      - key: SKIP_INSTALL_DEPS
+        value: "true"
