@@ -188,16 +188,98 @@ function enqueuePut(fn) {
   return run;
 }
 
-function getSnapshot(res) {
-  if (!fs.existsSync(SNAP_FILE)) {
+function noStore(extra) {
+  return Object.assign(
+    {
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      Pragma: 'no-cache',
+    },
+    extra || {}
+  );
+}
+
+function parseSnapBuf(buf) {
+  const j = JSON.parse(Buffer.from(buf).toString('utf8'));
+  if (!j || j.app !== 'Tablero PF Alpha') throw new Error('not a Tablero PF Alpha snapshot');
+  return j;
+}
+
+function readLocalSnapshot() {
+  if (!fs.existsSync(SNAP_FILE)) return null;
+  try {
+    const buf = fs.readFileSync(SNAP_FILE);
+    parseSnapBuf(buf);
+    return buf;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalSnapshot(buf) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = SNAP_FILE + '.tmp';
+  fs.writeFileSync(tmp, buf);
+  fs.renameSync(tmp, SNAP_FILE);
+}
+
+async function fetchGithubSnapshot() {
+  const token = gitToken();
+  const headers = {
+    'User-Agent': 'dashboardtgs',
+    Accept: 'application/vnd.github.raw',
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 5000);
+  try {
+    const r = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPO}/contents/${SNAP_REL}?ref=main`,
+      { headers, signal: ac.signal }
+    );
+    if (!r.ok) return null;
+    const buf = Buffer.from(await r.arrayBuffer());
+    parseSnapBuf(buf);
+    return buf;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+let snapCache = { at: 0, buf: null };
+
+function invalidateSnapCache() {
+  snapCache = { at: 0, buf: null };
+}
+
+async function bestSnapshot() {
+  if (snapCache.buf && Date.now() - snapCache.at < 8000) return snapCache.buf;
+  const local = readLocalSnapshot();
+  const remote = await fetchGithubSnapshot();
+  let pick = local;
+  if (remote && local) {
+    let gR = '', gL = '';
+    try { gR = parseSnapBuf(remote).generado || ''; } catch { /* ignore */ }
+    try { gL = parseSnapBuf(local).generado || ''; } catch { /* ignore */ }
+    pick = gR > gL ? remote : local;
+  } else if (remote) {
+    pick = remote;
+  }
+  if (pick && remote && pick === remote) {
+    try { writeLocalSnapshot(remote); } catch { /* ignore */ }
+  }
+  snapCache = { at: Date.now(), buf: pick };
+  return pick;
+}
+
+async function getSnapshot(res) {
+  const body = await bestSnapshot();
+  if (!body) {
     send(res, 204, '');
     return;
   }
-  const body = fs.readFileSync(SNAP_FILE);
-  send(res, 200, body, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store',
-  });
+  send(res, 200, body, noStore({ 'Content-Type': 'application/json; charset=utf-8' }));
 }
 
 async function putSnapshot(req, res) {
@@ -223,10 +305,8 @@ async function putSnapshot(req, res) {
     sendJson(res, 400, { ok: false, error: 'not a Tablero PF Alpha snapshot' });
     return;
   }
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = SNAP_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(snap));
-  fs.renameSync(tmp, SNAP_FILE);
+  writeLocalSnapshot(Buffer.from(JSON.stringify(snap)));
+  invalidateSnapCache();
 
   const git = await persistToGit();
   if (!git.ok) {
@@ -237,20 +317,37 @@ async function putSnapshot(req, res) {
     });
     return;
   }
+  invalidateSnapCache();
   sendJson(res, 200, { ok: true, git: true, generado: snap.generado || null });
 }
 
-function serveHtml(res, urlPath) {
+function embedSnapshot(html, buf) {
+  const json = buf
+    ? Buffer.from(buf).toString('utf8').replace(/</g, '\\u003c')
+    : 'null';
+  const block = `window.__SHARED_SNAPSHOT=${json};/*__SHARED_SNAPSHOT_END__*/`;
+  if (html.includes('/*__SHARED_SNAPSHOT_END__*/')) {
+    return html.replace(
+      /window\.__SHARED_SNAPSHOT=[\s\S]*?\/\*__SHARED_SNAPSHOT_END__\*\//,
+      block
+    );
+  }
+  return html.replace(
+    '(async()=>{ await cargarCompartido(); render(); })();',
+    `${block}\n(async()=>{ await cargarCompartido(); render(); })();`
+  );
+}
+
+async function serveHtml(res, urlPath) {
   const file = urlPath === '/' ? 'index.html' : path.basename(urlPath);
   const full = path.join(ROOT, file);
   if (!fs.existsSync(full)) {
     send(res, 404, 'Not found', { 'Content-Type': 'text/plain; charset=utf-8' });
     return;
   }
-  send(res, 200, fs.readFileSync(full), {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Cache-Control': 'no-store',
-  });
+  let html = fs.readFileSync(full, 'utf8');
+  html = embedSnapshot(html, await bestSnapshot());
+  send(res, 200, html, noStore({ 'Content-Type': 'text/html; charset=utf-8' }));
 }
 
 const server = http.createServer(async (req, res) => {
@@ -263,7 +360,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (p === '/api/snapshot' && req.method === 'GET') {
-      getSnapshot(res);
+      await getSnapshot(res);
       return;
     }
     if (p === '/api/snapshot' && (req.method === 'PUT' || req.method === 'POST')) {
@@ -271,7 +368,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (req.method === 'GET' && (p === '/' || HTML_FILES.has(p))) {
-      serveHtml(res, p);
+      await serveHtml(res, p);
       return;
     }
     send(res, 404, 'Not found', { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -283,4 +380,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`dashboardtgs listening on http://${HOST}:${PORT}`);
+  bestSnapshot().catch((err) => console.error('snapshot refresh', err));
 });

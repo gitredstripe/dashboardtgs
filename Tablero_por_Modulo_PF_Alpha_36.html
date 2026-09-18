@@ -299,9 +299,10 @@ table.ag td.tot{background:var(--blue-tint);color:var(--blue);font-weight:700}
    <button id="btnHist">Historial de cortes</button>
    <button id="btnSave" title="Guarda el tablero compartido. Quien abra este enlace verá esta versión.">Guardar tablero</button>
    <button id="btnDl" title="Descarga una copia .json en este equipo">Descargar .json</button>
-   <button id="btnLoad" title="Carga un .json local y te deja elegir cómo fusionarlo">Cargar archivo (.json)</button>
+   <button id="btnLoad" title="Carga un .json local, lo aplica y lo guarda en el enlace compartido">Cargar archivo (.json)</button>
    <input type="file" id="file" accept=".json" style="display:none">
  </div>
+ <div id="syncStatus" class="mini2" style="margin-top:8px">Cargando tablero compartido…</div>
  <div class="kpis" id="kpis"></div>
 </div>
 <div class="card" style="padding:10px 14px">
@@ -977,26 +978,82 @@ function normalizaSnap(snap){
   }
   return snap;
 }
+function setSyncStatus(msg){
+  const el=document.getElementById('syncStatus');
+  if(el) el.textContent=msg||'';
+}
+function hidratarDesdeSnap(snap){
+  snap=normalizaSnap(snap);
+  if(!snap||snap.app!=='Tablero PF Alpha'||!Array.isArray(snap.mods)) return false;
+  const campos=['res','com','accion','respP','fEnt','piTipo','piOrden'];
+  let tocadas=0;
+  snap.mods.forEach(x=>{
+    const m=MODS.find(z=>z.pf===x.pf); if(!m)return;
+    if(x.ficha) Object.assign(m.ficha||(m.ficha={}), x.ficha);
+    if(x.comentarios) m.comentarios=x.comentarios;
+    const byCod={};
+    (m.grupos||[]).forEach(g=>(g.items||[]).forEach(i=>{ byCod[i.cod]=i; }));
+    (x.grupos||[]).forEach(g=>{
+      const gr=(m.grupos||[]).find(z=>z.etapa===g.etapa);
+      if(gr && ('lib' in g)) gr.lib=!!g.lib;
+      (g.items||[]).forEach(y=>{
+        const it=byCod[y.cod]; if(!it)return;
+        campos.forEach(c=>{ it[c]=y[c]||''; });
+        if(y.sello) it.sello=y.sello;
+        tocadas++;
+      });
+    });
+    (x.sesiones||[]).forEach(y=>{
+      const s=(m.sesiones||[]).find(z=>z.id===y.id); if(!s)return;
+      Object.assign(s,{fecha:y.fecha,hi:y.hi,hf:y.hf,resp:y.resp,estado:y.estado,nota:y.nota||s.nota});
+      if(y.cambios) s.cambios=y.cambios;
+      if(y.base && !s.base) s.base=y.base;
+    });
+    if(x.pract) m.pract=Object.assign(m.pract||{}, x.pract);
+    if(x.casos) m.casos=x.casos;
+    if(x.faltantes) m.faltantes=x.faltantes;
+    if('habPI' in x) m.habPI=!!x.habPI;
+    (m.grupos||[]).forEach(gr=>(gr.items||[]).forEach(it=>{
+      const ss=(m.sesiones||[]).find(z=>z.id===it.sesid);
+      if(ss){ it.fecha=ss.fecha; it.ses=ss.ses; }
+    }));
+  });
+  const n=snap.resumen&&snap.resumen.hechas;
+  setSyncStatus('Tablero compartido · '+(snap.generado?('actualizado '+snap.generado):'cargado')+(n!=null?' · '+n+' actividades hechas':''));
+  return tocadas>0 || (snap.mods&&snap.mods.length>0);
+}
 async function guardarCompartido(){
   const snap=snapshot();
   const r=await fetch(SNAP_URL,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(snap)});
-  if(!r.ok){
-    const t=await r.text().catch(()=> '');
-    let msg=t;
-    try{ const j=JSON.parse(t); if(j.error) msg=j.error; }catch(e){}
-    throw new Error(msg||('HTTP '+r.status));
-  }
+  const t=await r.text().catch(()=> '');
+  let msg=t, body=null;
+  try{ body=JSON.parse(t); if(body.error) msg=body.error; }catch(e){}
+  if(!r.ok) throw new Error(msg||('HTTP '+r.status));
+  setSyncStatus('Guardado en el enlace compartido'+(snap.generado?(' · '+snap.generado):''));
+  return body;
 }
 async function cargarCompartido(){
+  let ok=false;
+  try{
+    if(window.__SHARED_SNAPSHOT) ok=hidratarDesdeSnap(window.__SHARED_SNAPSHOT)||ok;
+  }catch(e){ console.error('embed snapshot', e); }
   try{
     const r=await fetch(SNAP_URL,{cache:'no-store'});
-    if(r.status===204||r.status===404) return false;
-    if(!r.ok) return false;
-    const snap=normalizaSnap(await r.json());
-    if(!snap||snap.app!=='Tablero PF Alpha') return false;
-    aplica(snap,'reemplazar',true);
-    return true;
-  }catch(e){ return false; }
+    if(r.status===204||r.status===404){
+      if(!ok) setSyncStatus('Sin captura compartida todavía. Usa Guardar tablero o Cargar archivo.');
+      return ok;
+    }
+    if(!r.ok){
+      if(!ok) setSyncStatus('No se pudo leer /api/snapshot (HTTP '+r.status+').');
+      return ok;
+    }
+    ok=hidratarDesdeSnap(await r.json())||ok;
+    return ok;
+  }catch(e){
+    console.error('api snapshot', e);
+    if(!ok) setSyncStatus('No se pudo cargar el tablero compartido. Se muestra la versión embebida.');
+    return ok;
+  }
 }
 document.getElementById('btnSave').onclick=async()=>{
   const b=document.getElementById('btnSave');
@@ -1055,7 +1112,7 @@ function analiza(snap){
 
 let RESPALDO=null;
 function aplica(snap, modo, silencioso){
-  RESPALDO=JSON.parse(JSON.stringify(MODS));
+  if(!silencioso) RESPALDO=JSON.parse(JSON.stringify(MODS));
   const A=idxAct(), S=idxSes();
   const campos=['res','com','accion','respP','fEnt','piTipo','piOrden'];
   let tocadas=0, saltadas=0, ses=0;
@@ -1072,7 +1129,7 @@ function aplica(snap, modo, silencioso){
     (x.grupos||[]).forEach(g=>{
       const gr=m.grupos.find(z=>z.etapa===g.etapa); if(gr && ('lib' in g)) gr.lib = modo==='reemplazar'? !!g.lib : (gr.lib||!!g.lib);
       (g.items||[]).forEach(y=>{
-        const it=A[y.cod]; if(!it)return;
+        const it=(m.grupos||[]).flatMap(z=>z.items||[]).find(i=>i.cod===y.cod)||A[y.cod]; if(!it)return;
         const dif=campos.some(c=>(y[c]||'')!==(it[c]||'')); if(!dif)return;
         const sa=y.sello||'', sm=selloAct(it);
         if(modo==='complementar'){
@@ -1196,11 +1253,20 @@ function panelCarga(snap){
        <div class="rg"><button class="bNA" id="mRep">Reemplazar todo</button></div></div>
    </div>`);
   document.getElementById('dx').onclick=cerrar;
-  document.getElementById('mComp').onclick=()=>aplica(snap,'complementar');
-  document.getElementById('mComb').onclick=()=>aplica(snap,'combinar');
+  const aplicarArchivo=async modo=>{
+    aplica(snap, modo);
+    try{
+      await guardarCompartido();
+      setSyncStatus('Archivo aplicado y guardado en el enlace compartido. Quien abra este URL verá estos datos.');
+    }catch(e){
+      alert('El archivo se aplicó en ESTE navegador, pero no quedó en el enlace compartido.\n'+(e.message||e)+'\nPulsa «Guardar tablero» o revisa GITHUB_TOKEN en Render.');
+    }
+  };
+  document.getElementById('mComp').onclick=()=>aplicarArchivo('complementar');
+  document.getElementById('mComb').onclick=()=>aplicarArchivo('combinar');
   document.getElementById('mRep').onclick=()=>{
     const p=prompt(`Vas a reemplazar todo el tablero con el archivo.\n${r.borrarian.length} actividades quedarían vacías.\nEscribe REEMPLAZAR para confirmar.`,'');
-    if((p||'').trim().toUpperCase()==='REEMPLAZAR') aplica(snap,'reemplazar');
+    if((p||'').trim().toUpperCase()==='REEMPLAZAR') aplicarArchivo('reemplazar');
   };
 }
 document.getElementById('btnLoad').onclick=()=>document.getElementById('file').click();
@@ -2739,5 +2805,6 @@ function xlsInformeConsolidado(L,resumen){
   const b=new Blob(['﻿'+x],{type:'application/vnd.ms-excel;charset=utf-8'}), u=URL.createObjectURL(b);
   const a=document.createElement('a'); a.href=u; a.download='Informe_Ejecutivo_PF_Alpha.xls'; a.click(); URL.revokeObjectURL(u);
 }
+window.__SHARED_SNAPSHOT=window.__SHARED_SNAPSHOT||null;/*__SHARED_SNAPSHOT_END__*/
 (async()=>{ await cargarCompartido(); render(); })();
 </script></body></html>

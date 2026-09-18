@@ -9,9 +9,10 @@ Single-page dashboard plus a tiny Node server. The shared board is
 node server.js
 ```
 
-Open `http://127.0.0.1:10000/`. **Guardar tablero** writes `/api/snapshot`
-and, with a token, commits and pushes `data/snapshot.json`. **Descargar .json**
-/ **Cargar archivo (.json)** are local backups.
+Open `http://127.0.0.1:10000/`. The page embeds `data/snapshot.json` (and
+also fetches `/api/snapshot`) so every visitor sees the last save.
+**Guardar tablero** PUTs that file and git-pushes it. **Cargar archivo (.json)**
+applies a local file **and then saves it to the shared URL**.
 
 ## Render — Web Service only
 
